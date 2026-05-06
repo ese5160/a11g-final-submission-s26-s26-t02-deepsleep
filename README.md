@@ -86,8 +86,8 @@ Do *not* commit any of your source code to this repository. Rather, provide link
 - A link to your Node-RED dashboard code
 - Links to any other software required for the functionality of your device
 
-
 Link to your final embedded C firmware codebases:
+**https://github.com/ese5160/final-project-firmware-s26-t02-deepsleep.git**
 
 Link to your Node-RED dashboard code:
-https://github.com/ese5160/final-project-firmware-s26-t02-deepsleep/blob/main/Node-RED/flows.json
+**https://github.com/ese5160/final-project-firmware-s26-t02-deepsleep/blob/main/Node-RED/flows.json**
