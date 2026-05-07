@@ -24,10 +24,24 @@ https://github.com/ese5160/a11g-final-submission-s26-s26-t02-deepsleep.git
 ### Device Description
 
 **Two-sentence description:**
-The Smart Art Protection Frame is an IoT-enabled security and monitoring device that attaches to artwork frames to continuously track environmental conditions (temperature, humidity), physical disturbances (vibration, displacement, pressure). When a security event is detected, the device autonomously captures a photo, pushes an alert notification to the user via cloud MQTT, and displays artwork metadata on a built-in LCD, all managed remotely over Wi-Fi.
+
+The Smart Art Protection Frame is an IoT-enabled artwork security system designed for homes, galleries, and exhibitions. It continuously monitors environmental conditions and physical disturbances around an artwork frame using multiple sensors.
+
+When abnormal activity is detected, the system automatically captures an image, uploads event data through MQTT over Wi-Fi, triggers local alarms, and sends cloud notifications. Artwork information can also be updated remotely and displayed on the onboard LCD.
 
 **Inspiration & Problem Solved:**
-Valuable artwork in homes, galleries, and exhibition spaces is vulnerable to theft, accidental damage, and environmental degradation, yet traditional protection solutions are either prohibitively expensive (museum-grade sensor arrays) or inadequate (simple motion alarms without context). Our device was inspired by the gap between these extremes: a self-contained, visually unobtrusive frame that provides professional-grade multi-sensor monitoring and cloud connectivity at a fraction of the cost, without requiring dedicated security infrastructure. It solves the problem of unattended artwork going unmonitored — particularly relevant for small galleries, traveling exhibitions, and private collectors.
+
+Traditional artwork protection systems are often either too expensive or too limited in functionality. Museum-grade monitoring systems require dedicated infrastructure, while low-cost alarms typically provide only basic motion detection without environmental monitoring or remote management.
+
+This project bridges that gap by providing:
+
+- Multi-sensor security monitoring
+- Cloud connectivity and remote configuration
+- Integrated camera capture
+- OTA firmware updates
+- Compact, unobtrusive installation
+
+The system is especially useful for small galleries, temporary exhibitions, and private collectors who need affordable remote monitoring.
 
 **Internet Augmentation:**
 The Internet connection transforms the device from a standalone alarm into a remotely managed, intelligent system. Sensor telemetry (temperature, humidity, FSR force readings, IMU motion data) is continuously published to an Azure-hosted MQTT broker at 52.159.96.72, where Node-RED flows process and visualize it on a dashboard. When an alarm fires, the camera captures a JPEG image that is **Base64-encoded** and **uploaded in chunks** over MQTT to cloud storage. The display content — artwork title and artist name — is configurable remotely by publishing to the TOPIC_FRAME_CONFIG topic, meaning the frame can be repurposed for a new artwork without physical access. Finally, firmware updates are delivered over-the-air (OTAU) by fetching a manifest JSON from Azure Blob Storage and autonomously downloading and flashing the new firmware image.
@@ -35,33 +49,43 @@ The Internet connection transforms the device from a standalone alarm into a rem
 ### Device Functionality
 
 **Design Overview:**
-The device is built around a Silicon Labs SiWx917 SoC (single-chip Wi-Fi + ARM Cortex-M4), which runs a FreeRTOS-based multi-task firmware with four concurrent tasks: **a Network Task (Wi-Fi, MQTT, OTA), a Data Task (sensor polling and LCD refresh), a Security Task (alarm logic and threshold evaluation), and a Camera Task (image capture and chunked upload)**. Tasks communicate via FreeRTOS queues and event flags rather than direct function calls, providing clean decoupling and preventing stack overflow from deep call chains.
+The device is built around a Silicon Labs SiWx917 SoC (single-chip Wi-Fi + ARM Cortex-M4), which runs a FreeRTOS-based multi-task firmware with four concurrent tasks. Tasks communicate via FreeRTOS queues and event flags rather than direct function calls, providing clean decoupling and preventing stack overflow from deep call chains.
+
+| Task          | Responsibility                           |
+| ------------- | ---------------------------------------- |
+| Network Task  | Wi-Fi, MQTT, OTA updates                 |
+| Data Task     | Sensor polling and LCD updates           |
+| Security Task | Alarm detection and threshold evaluation |
+| Camera Task   | Image capture and MQTT upload            |
 
 **Sensors:**
 
-- **SHT30** (I2C0, address 0x44): Temperature and humidity, sampled every 1 second using high-repeatability mode (0x2400 command), with CRC8 validation on the 6-byte response.
-- **BNO085 IMU** (I2C0, address 0x4A): 6-axis gyroscope and accelerometer sampled every 100 ms; normalized vector magnitude is thresholded by the Security Task to detect artwork being moved or struck.
-- **FSR** (Force Sensitive Resistor) via ADC (GPIO30): Measures pressure on the frame mounting surface. A baseline is established at boot; a delta exceeding 220 ADC counts triggers an alarm, while recovery below 120 counts clears it.
-- **OV2640 Camera**: 320x240 JPEG capture via GSPI (SPI data burst) and SCCB register programming (I2C1).
+| Sensor                                                    | Function                                                                                                                                                                          |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SHT30** (I2C0, address 0x44)                      | Temperature and humidity, sampled every 1 second using high-repeatability mode (0x2400 command), with CRC8 validation on the 6-byte response                                      |
+| **BNO085 IMU** (I2C0, address 0x4A)                 | 6-axis gyroscope and accelerometer sampled every 100 ms; normalized vector magnitude is thresholded by the Security Task to detect artwork being moved or struck                  |
+| **FSR** (Force Sensitive Resistor) via ADC (GPIO30) | Measures pressure on the frame mounting surface. A baseline is established at boot; a delta exceeding 220 ADC counts triggers an alarm, while recovery below 120 counts clears it |
+| OV2640 Camera                                             | 320x240 JPEG capture via GSPI (SPI data burst) and SCCB register programming (I2C1)                                                                                               |
 
-**Actuators & Output:**
+**Actuators and Output:**
 
-- **LCD1602** (I2C0 backpack, address 0x27/0x3F): 16x2 character display showing artist name and real-time temperature/humidity, updated every 2 seconds from cloud-configured artwork metadata.
-- **LED / Buzzer**: Local alarm feedback triggered on security events.
+| Component                                            | Function                                                                                                                                      |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LCD1602** (I2C0 backpack, address 0x27/0x3F) | 16x2 character display showing artist name and real-time temperature/humidity, updated every 2 seconds from cloud-configured artwork metadata |
+| LED / Buzzer                                         | Local alarm feedback triggered on security events                                                                                             |
 
 **Cloud Communication:**
 MQTT topics carry structured JSON payloads. Key topics: telemetry (environmental data), alarm/state, alarm/event, alarm/image/chunk (Base64 JPEG chunks with sequence numbers and CRC), ota/now (trigger OTA), ota/status (firmware update state machine feedback).
 
-### Challenges
+### Key Technical Challenges
 
-#### OV2640 Camera SCCB and I2C Protocol Mismatch
+#### 1. OV2640 SCCB vs. Standard I2C
 
 After porting the OV2640 driver to Simplicity Studio (SiWx917 SDK), the camera initialization consistently failed: the register programming sequence appeared to execute without errors, but image capture produced corrupted or empty FIFO data. The root cause turned out to be a fundamental protocol difference between SCCB (Serial Camera Control Bus, used by OV2640) and standard I2C.
 
-**The difference in detail:**
 Standard I2C requires the slave device to acknowledge every byte with an ACK pulse. The Simplicity Studio I2C driver function `sl_i2c_driver_send_data_blocking()` returns `SL_I2C_NACK` and treats it as an error if the slave does not ACK. SCCB, by contrast, is a write-only, one-master protocol derived from I2C where the slave (OV2640) is not required to send an ACK — its acknowledge bit is officially "don't care." The OV2640 datasheet explicitly states this. As a result, calling the standard I2C driver and checking for `SL_I2C_SUCCESS` caused all register writes to be flagged as failures when the camera did not ACK, and the driver aborted initialization mid-table.
 
-**Fix:** We modified the SCCB wrapper to treat `SL_I2C_NACK` as equivalent to `SL_I2C_SUCCESS`:
+We modified the SCCB wrapper to treat `SL_I2C_NACK` as equivalent to `SL_I2C_SUCCESS`:
 
 ```c
 static sl_i2c_status_t sccb_write(uint8_t reg, uint8_t val) {
@@ -74,12 +98,10 @@ static sl_i2c_status_t sccb_write(uint8_t reg, uint8_t val) {
 
 This is also why the camera uses a dedicated I2C instance (I2C1) rather than sharing I2C0 with other sensors — isolating SCCB's NACK-tolerant behavior prevents it from interfering with sensors that correctly use standard I2C ACK semantics.
 
-#### OTAU Network Task Stack Overflow and Manual Reset Requirement
+#### 2. OTA Stack Overflow
 
-**Stack Overflow Problem:**
 The Network Task originally performed all Wi-Fi management, MQTT publish/subscribe, HTTP manifest fetching, and OTA firmware download sequentially within a single task loop. Under this design, when an OTA update was triggered, the task called `sl_mqtt_client_disconnect()`, then `sl_http_client_send_request()` (for manifest fetch), then `sl_wifi_start_stateless_otaf()` — all within the same call stack frame. The `sl_wifi_start_stateless_otaf()` function internally allocates large buffers and spawns deep callback chains for TLS handshaking and firmware block reception. Combined with the already-deep MQTT handler stack frames from the publish/subscribe loop, this exceeded the 6144-byte Network Task stack, triggering the FreeRTOS stack overflow hook (`vApplicationStackOverflowHook`, detected via Method 2 stack canary checking in `FreeRTOSConfig.h`).
 
-**Flag-Based Decoupling:**
 Instead of calling OTA functions directly from within the MQTT receive callback or the main network loop body, the MQTT message handler now only sets a boolean flag (`runtime_ota_requested = true`) when the `ota/now` topic arrives. The Network Task's main loop checks this flag at the top of each iteration. At that point the MQTT receive stack has fully unwound, and the OTA call is made from a shallow, clean stack frame. This avoids the compounded stack depth of nested callbacks:
 
 ```c
@@ -95,7 +117,7 @@ if (runtime_ota_requested) {
 }
 ```
 
-**Software Reset via Watchdog:**
+#### 3. Automatic Software Reset After OTA
 After a successful OTA firmware flash, the SiWx917 NWP (network processor) requires a chip reset to boot the new image. Initially, this required a manual hardware reset (pressing the physical RESET button), which is clearly unacceptable for a remotely managed device. The fix was to trigger a software reset using the on-chip Window Watchdog Timer (WWDT).
 
 The principle: the WWDT is configured with an interrupt timer (`NET_INIT_WDT_INTR_TIME = 16`) and a system reset timer (`NET_INIT_WDT_RESET_TIME = 17`) in units of the 32 kHz clock. After OTA completion, the firmware arms the watchdog and deliberately never feeds it (never calls `RSI_WWDT_ReStart()`). When the system reset counter expires, the WWDT asserts a chip-level hardware reset signal via `MCU_WDT_BASED_CHIP_RESET`, which cycles the SoC exactly as if the physical reset button were pressed, causing the bootloader to load the new firmware image:
@@ -132,13 +154,33 @@ The watchdog is also used during the network initialization phase as a safety ne
 
 ### Next Steps & Takeaways
 
-**Steps to finish or improve:**
+**Automatic Self-Balancing**
 
-- Security hardening: Add TLS/certificate-based authentication to the MQTT broker (currently using unauthenticated MQTT on port 1883). Rotate device credentials using a certificate provisioned at manufacturing time.
-- Image quality and compression: The current 320x240 JPEG output is adequate but limiting for positive identification. Upgrading to a higher-resolution sensor or tuning OV2640 JPEG quality factor would improve the security use case.
+A motorized counterweight mechanism could be integrated to maintain horizontal frame alignment. A T8 lead screw (2–4 mm lead, 100–200 mm length) drives a metal counterweight block (100–500 g) linearly along a guide rail; the nut is fixed to the block and constrained against rotation, so the motor's rotation translates directly into horizontal mass displacement. By shifting the center of mass, the frame passively rotates under gravity toward a level equilibrium. No active tilt control loop is required, only open-loop position commands derived from IMU feedback already present in the system.
+
+Tilt sensing: The BNO085 IMU already sampled at 100 ms intervals provides roll angle via accelerometer: `θ = atan2(ay, az)`. No additional sensor needed.
+
+Control logic (simple bang-bang or proportional):
+
+if |θ| < deadband (e.g. 1°)  → stop motor
+  if θ > 0                      → drive screw left  (shift CoM right)
+  if θ < 0                      → drive screw right (shift CoM left)
+
+A proportional speed scaling (`duty ∝ |θ|`) reduces overshoot near equilibrium.
+
+Motor control: A stepper or DC motor with encoder drives the lead screw. The firmware maps tilt angle to step count using the screw lead (e.g. 2 mm/rev) and estimated CoM sensitivity (mm of counterweight travel per degree of correction). Software limits enforce end-stop boundaries to prevent mechanical over-travel.
+
+Task integration: Add a `Balance Task` (low priority) that reads `gyro_norm` / tilt angle from the existing `mutex_sensor_state`, computes the correction, and issues motor commands via GPIO or UART to a motor driver. It runs only when `SYSTEM_FLAG_ALARM_ACTIVE` is clear — balancing is suspended during security events to avoid interfering with vibration detection.
+
+Convergence check: If `|θ| < deadband` holds for N consecutive samples (e.g. 5 × 100 ms), the motor is de-energized to save power.
+
+**Additional Improvements**
+
+- **Security hardening:** Add TLS/certificate-based authentication to the MQTT broker (currently using unauthenticated MQTT on port 1883). Rotate device credentials using a certificate provisioned at manufacturing time.
+- **Image quality and compression:** The current 320x240 JPEG output is adequate but limiting for positive identification. Upgrading to a higher-resolution sensor or tuning OV2640 JPEG quality factor would improve the security use case.
+- **Mobile app:** Replace the Node-RED dashboard with a proper mobile notification app using push notifications (FCM/APNs) for alarm alerts, so users are notified even when not actively monitoring a dashboard.
 - Local storage fallback: Add a microSD card or SPI flash buffer so that alarm events and images captured during Wi-Fi outages are queued locally and uploaded when connectivity resumes.
 - Power optimization: Implement deep-sleep between sensor polling intervals to enable battery-backed operation in locations without convenient power outlets.
-- Mobile app: Replace the Node-RED dashboard with a proper mobile notification app using push notifications (FCM/APNs) for alarm alerts, so users are notified even when not actively monitoring a dashboard.
 
 **What ESE5160 taught us:**
 ESE5160 gave us end-to-end experience with the full embedded IoT stack, **from low-level hardware bring-up (I2C/SPI driver development, ADC configuration, sensor register programming) through RTOS task architecture and IPC design, all the way to cloud connectivity, OTA firmware updates, and data visualization**. The semester-long prototyping process closely mirrors real embedded product development and gave us genuine appreciation for the engineering discipline required to ship reliable connected devices.
@@ -165,8 +207,6 @@ https://upenn-eselabs.365.altium.com/designs/A9A2A324-723F-4F3C-BA00-0C47C1A8A39
 | HRS-09       | No  | An internal movable mass mechanism should be used to adjust the horizontal position of the overall center of mass of the picture frame.                                                                                                                                                                                                                               |
 | HRS-10       | No  | A lead screw–based linear actuation mechanism should be used to convert motor rotation into linear motion for the movable mass.                                                                                                                                                                                                                                      |
 | HRS-11       | No  | A stepper motor should be used to drive the lead screw for precise and repeatable positioning of the movable mass.                                                                                                                                                                                                                                                    |
-
-Lead Screw Assembly: The system uses a T8 lead screw with a 2 mm or 4 mm lead and a typical length of 100–200 mm, depending on the frame width. A matching nut is rigidly fixed to the counterweight block and constrained against rotation, allowing only linear translation along the screw. The counterweight block, typically made of metal with a mass in the range of 100–500 g, is mounted on a linear guide slider to ensure smooth motion. A single linear guide rail is sufficient to prevent binding and maintain alignment during operation.
 
 ### Software Requirements Specification (SRS)
 
